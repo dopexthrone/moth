@@ -1,23 +1,25 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
+import type { ProviderID } from '../core/providers/types.js';
 
 const CONFIG_DIR = path.join(os.homedir(), '.config', 'moth');
 const CONFIG_FILE = path.join(CONFIG_DIR, 'config.json');
 const KEY_FILE = path.join(CONFIG_DIR, '.api-key');
 
 export interface MothConfig {
+  provider: ProviderID;
   model: string;
   maxTokens: number;
-  theme: 'auto' | 'light' | 'dark';
   confirmTools: boolean;
   streamOutput: boolean;
+  baseUrl?: string;
 }
 
 const DEFAULT_CONFIG: MothConfig = {
-  model: 'claude-sonnet-4-6',
+  provider: 'xai',
+  model: 'grok-3-beta',
   maxTokens: 8192,
-  theme: 'auto',
   confirmTools: true,
   streamOutput: true,
 };
@@ -49,11 +51,24 @@ export function saveConfig(config: Partial<MothConfig>): void {
 }
 
 export function getApiKey(): string | null {
-  // 1. Environment variable takes priority
-  const envKey = process.env.ANTHROPIC_API_KEY;
-  if (envKey) return envKey;
+  // 1. Provider-specific env vars take priority
+  const envKeys: Record<string, string | undefined> = {
+    anthropic: process.env.ANTHROPIC_API_KEY,
+    xai: process.env.XAI_API_KEY,
+    openai: process.env.OPENAI_API_KEY,
+    google: process.env.GOOGLE_API_KEY,
+    openrouter: process.env.OPENROUTER_API_KEY,
+  };
 
-  // 2. Config file
+  const config = loadConfig();
+  const providerKey = envKeys[config.provider];
+  if (providerKey) return providerKey;
+
+  // 2. Generic env var
+  const genericKey = process.env.MOTH_API_KEY;
+  if (genericKey) return genericKey;
+
+  // 3. Config file
   ensureConfigDir();
   try {
     if (fs.existsSync(KEY_FILE)) {

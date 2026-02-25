@@ -8,6 +8,7 @@ import { AgentLoop } from '../core/agent-loop.js';
 import { bus } from '../core/event-bus.js';
 import { allTools } from '../tools/index.js';
 import { loadConfig } from '../utils/config.js';
+import { createProvider } from '../core/providers/index.js';
 
 interface ConversationEntry {
   id: number;
@@ -48,8 +49,13 @@ export function App({ apiKey }: AppProps): React.ReactElement {
 
   // Initialize agent loop once
   useEffect(() => {
-    const agent = new AgentLoop(apiKey, allTools, {
+    const provider = createProvider({
+      provider: config.provider,
+      apiKey,
       model: config.model,
+      baseUrl: config.baseUrl,
+    });
+    const agent = new AgentLoop(provider, allTools, {
       maxTokens: config.maxTokens,
       confirmDestructive: config.confirmTools,
     });
@@ -160,7 +166,7 @@ export function App({ apiKey }: AppProps): React.ReactElement {
     return () => {
       for (const unsub of unsubs) unsub();
     };
-  }, [apiKey, config.model, config.maxTokens, config.confirmTools]);
+  }, [apiKey, config.provider, config.model, config.maxTokens, config.confirmTools, config.baseUrl]);
 
   // Handle Ctrl+C for cancellation during operations
   useInput((input, key) => {
@@ -211,7 +217,7 @@ export function App({ apiKey }: AppProps): React.ReactElement {
         return;
       }
       if (cmd === 'model') {
-        setConversation((prev) => [...prev, { id: entryId++, type: 'system', content: `Model: ${config.model}` }]);
+        setConversation((prev) => [...prev, { id: entryId++, type: 'system', content: `Provider: ${config.provider} | Model: ${config.model}` }]);
         return;
       }
       if (cmd === 'tokens') {

@@ -1,8 +1,11 @@
 import React from 'react';
 import { Box, Text } from 'ink';
 import { theme } from '../utils/theme.js';
+import { loadConfig } from '../utils/config.js';
 
 export function Banner(): React.ReactElement {
+  const config = loadConfig();
+
   return (
     <Box flexDirection="column" marginBottom={1}>
       <Box>
@@ -10,8 +13,9 @@ export function Banner(): React.ReactElement {
           {'  ◈ moth '}
         </Text>
         <Text color={theme.textMuted}>v0.1.0</Text>
-        <Text color={theme.textDim}> — AI coding assistant by </Text>
-        <Text color={theme.purple}>motherlabs</Text>
+        <Text color={theme.textDim}> — </Text>
+        <Text color={theme.coral}>{config.provider}</Text>
+        <Text color={theme.textDim}>/{config.model}</Text>
       </Box>
       <Box>
         <Text color={theme.border}>

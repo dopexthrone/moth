@@ -4,21 +4,16 @@
  * This is a proper state machine that drives the conversation cycle:
  *   user input → model call → tool execution → model call → ... → idle
  *
- * Key design decisions:
- * - The loop owns the conversation lifecycle, not the UI
- * - Tool execution is async with timeout + cancellation
- * - Context window is managed with automatic sliding window
- * - All state transitions emit events to the bus
- * - The loop is re-entrant safe (one turn at a time)
+ * PROVIDER-AGNOSTIC: Operates through the ModelProvider interface.
+ * Supports xAI, Anthropic, OpenAI, Google, OpenRouter, custom endpoints.
  */
 
-import Anthropic from '@anthropic-ai/sdk';
-import { bus, type MothEvent } from './event-bus.js';
+import { bus } from './event-bus.js';
 import { type Tool, type ToolResult } from '../tools/types.js';
 import { validateToolInput } from '../tools/validator.js';
+import type { ModelProvider, ChatMessage, ContentBlock, ToolDefinition, ProviderEvent } from './providers/types.js';
 
 export interface AgentConfig {
-  model: string;
   maxTokens: number;
   maxTurns: number;          // hard ceiling on tool-use loops per user message
   toolTimeoutMs: number;     // per-tool execution timeout
@@ -27,15 +22,14 @@ export interface AgentConfig {
 }
 
 const DEFAULT_CONFIG: AgentConfig = {
-  model: 'claude-sonnet-4-6',
   maxTokens: 8192,
   maxTurns: 25,
   toolTimeoutMs: 120_000,
   confirmDestructive: true,
-  contextWindowTokens: 180_000,  // keep ~20k buffer from 200k context
+  contextWindowTokens: 180_000,
 };
 
-const SYSTEM_PROMPT = `You are Moth, an AI coding assistant built by Motherlabs, powered by Claude.
+const SYSTEM_PROMPT = `You are Moth, an AI coding assistant built by Motherlabs.
 
 You work in the user's terminal to help with software engineering: writing code, debugging, refactoring, explaining systems, running tests, managing git.
 
@@ -67,17 +61,13 @@ type LoopState =
   | 'waiting_approval'
   | 'error';
 
-interface ConversationMessage {
-  role: 'user' | 'assistant';
-  content: string | Anthropic.ContentBlockParam[];
-}
-
 export class AgentLoop {
-  private client: Anthropic;
+  private provider: ModelProvider;
   private config: AgentConfig;
-  private history: ConversationMessage[] = [];
+  private history: ChatMessage[] = [];
   private state: LoopState = 'idle';
   private tools: Tool[] = [];
+  private toolDefs: ToolDefinition[] = [];
   private toolMap: Map<string, Tool> = new Map();
   private abortController: AbortController | null = null;
   private totalTokensIn = 0;
@@ -89,10 +79,18 @@ export class AgentLoop {
     resolve: (approved: boolean) => void;
   } | null = null;
 
-  constructor(apiKey: string, tools: Tool[], config?: Partial<AgentConfig>) {
-    this.client = new Anthropic({ apiKey });
+  constructor(provider: ModelProvider, tools: Tool[], config?: Partial<AgentConfig>) {
+    this.provider = provider;
     this.config = { ...DEFAULT_CONFIG, ...config };
     this.tools = tools;
+
+    // Pre-compute tool definitions for the provider
+    this.toolDefs = tools.map((t) => ({
+      name: t.name,
+      description: t.description,
+      inputSchema: t.inputSchema,
+    }));
+
     for (const tool of tools) {
       this.toolMap.set(tool.name, tool);
     }
@@ -123,6 +121,10 @@ export class AgentLoop {
     return this.history.length;
   }
 
+  get providerName(): string {
+    return this.provider.displayName;
+  }
+
   /**
    * Process a user message through the full agentic cycle.
    * This is the main entry point — call once per user input.
@@ -148,18 +150,14 @@ export class AgentLoop {
     while (turnsRemaining > 0) {
       turnsRemaining--;
 
-      const assistantContent = await this.callModel();
-      if (!assistantContent) break; // error occurred, already emitted
+      const responseBlocks = await this.callModel();
+      if (!responseBlocks) break; // error occurred, already emitted
 
       // Extract tool uses from the response
       const toolUses: Array<{ id: string; name: string; input: Record<string, unknown> }> = [];
-      for (const block of assistantContent) {
+      for (const block of responseBlocks) {
         if (block.type === 'tool_use') {
-          toolUses.push({
-            id: block.id,
-            name: block.name,
-            input: block.input as Record<string, unknown>,
-          });
+          toolUses.push({ id: block.id, name: block.name, input: block.input });
         }
       }
 
@@ -171,22 +169,22 @@ export class AgentLoop {
 
       // Execute tools and collect results
       this.state = 'processing_tools';
-      const toolResults: Anthropic.ToolResultBlockParam[] = [];
+      const toolResultBlocks: ContentBlock[] = [];
 
       for (const toolUse of toolUses) {
         const result = await this.executeTool(toolUse.id, toolUse.name, toolUse.input);
-        toolResults.push({
+        toolResultBlocks.push({
           type: 'tool_result',
-          tool_use_id: toolUse.id,
+          toolCallId: toolUse.id,
           content: result.content,
-          is_error: result.isError ?? false,
+          isError: result.isError ?? false,
         });
       }
 
-      // Add tool results to history as a user message (per API spec)
+      // Add tool results to history
       this.history.push({
         role: 'user',
-        content: toolResults as unknown as Anthropic.ContentBlockParam[],
+        content: toolResultBlocks,
       });
 
       // Loop continues — model will see tool results and decide next action
@@ -205,51 +203,61 @@ export class AgentLoop {
   }
 
   /**
-   * Call the Claude API with streaming. Emits events as tokens arrive.
-   * Returns the full content blocks array, or null on error.
+   * Call the model via the provider abstraction.
+   * Emits events as tokens arrive.
+   * Returns the assembled content blocks, or null on error.
    */
-  private async callModel(): Promise<Anthropic.ContentBlock[] | null> {
+  private async callModel(): Promise<ContentBlock[] | null> {
     this.state = 'calling_model';
     this.abortController = new AbortController();
 
     bus.emit({ type: 'agent:thinking', timestamp: Date.now() });
 
-    const anthropicTools: Anthropic.Tool[] = this.tools.map((t) => ({
-      name: t.name,
-      description: t.description,
-      input_schema: t.inputSchema as Anthropic.Tool.InputSchema,
-    }));
-
     try {
-      const stream = this.client.messages.stream(
-        {
-          model: this.config.model,
-          max_tokens: this.config.maxTokens,
-          system: SYSTEM_PROMPT,
-          messages: this.history as Anthropic.MessageParam[],
-          tools: anthropicTools.length > 0 ? anthropicTools : undefined,
-        },
-        { signal: this.abortController.signal },
-      );
-
       let textAccumulator = '';
+      const toolCalls: Array<{ id: string; name: string; input: Record<string, unknown> }> = [];
+      let usage = { inputTokens: 0, outputTokens: 0 };
+
+      const stream = this.provider.streamChat({
+        messages: this.history,
+        tools: this.toolDefs,
+        systemPrompt: SYSTEM_PROMPT,
+        maxTokens: this.config.maxTokens,
+        signal: this.abortController.signal,
+      });
 
       for await (const event of stream) {
-        if (event.type === 'content_block_delta') {
-          if (event.delta.type === 'text_delta') {
-            textAccumulator += event.delta.text;
+        switch (event.type) {
+          case 'text_delta':
+            textAccumulator += event.text;
             bus.emit({
               type: 'agent:text',
-              delta: event.delta.text,
+              delta: event.text,
               timestamp: Date.now(),
             });
-          }
+            break;
+
+          case 'tool_call_end':
+            toolCalls.push({ id: event.id, name: event.name, input: event.input });
+            bus.emit({
+              type: 'agent:tool_request',
+              toolId: event.id,
+              toolName: event.name,
+              input: event.input,
+              timestamp: Date.now(),
+            });
+            break;
+
+          case 'done':
+            usage = event.usage;
+            break;
+
+          case 'error':
+            throw event.error;
         }
       }
 
-      const finalMessage = await stream.finalMessage();
-
-      // Emit text completion if there was text content
+      // Emit text completion
       if (textAccumulator) {
         bus.emit({
           type: 'agent:text:done',
@@ -258,39 +266,32 @@ export class AgentLoop {
         });
       }
 
-      // Emit tool request events for the UI
-      for (const block of finalMessage.content) {
-        if (block.type === 'tool_use') {
-          bus.emit({
-            type: 'agent:tool_request',
-            toolId: block.id,
-            toolName: block.name,
-            input: block.input as Record<string, unknown>,
-            timestamp: Date.now(),
-          });
-        }
-      }
-
       // Track usage
-      this.totalTokensIn += finalMessage.usage.input_tokens;
-      this.totalTokensOut += finalMessage.usage.output_tokens;
+      this.totalTokensIn += usage.inputTokens;
+      this.totalTokensOut += usage.outputTokens;
 
       bus.emit({
         type: 'agent:turn_complete',
-        usage: {
-          inputTokens: finalMessage.usage.input_tokens,
-          outputTokens: finalMessage.usage.output_tokens,
-        },
+        usage,
         timestamp: Date.now(),
       });
+
+      // Build content blocks for history
+      const contentBlocks: ContentBlock[] = [];
+      if (textAccumulator) {
+        contentBlocks.push({ type: 'text', text: textAccumulator });
+      }
+      for (const tc of toolCalls) {
+        contentBlocks.push({ type: 'tool_use', id: tc.id, name: tc.name, input: tc.input });
+      }
 
       // Add assistant response to history
       this.history.push({
         role: 'assistant',
-        content: finalMessage.content as unknown as Anthropic.ContentBlockParam[],
+        content: contentBlocks,
       });
 
-      return finalMessage.content;
+      return contentBlocks;
     } catch (err) {
       if (err instanceof Error && err.name === 'AbortError') {
         bus.emit({
@@ -305,20 +306,18 @@ export class AgentLoop {
 
       const error = err instanceof Error ? err : new Error(String(err));
 
-      // Classify the error for actionable handling
-      const isRateLimit = error.message.includes('rate_limit') || error.message.includes('429');
-      const isOverloaded = error.message.includes('overloaded') || error.message.includes('529');
-      const isAuthError = error.message.includes('authentication') || error.message.includes('401');
+      // Classify common API errors
+      const msg = error.message.toLowerCase();
+      const isRateLimit = msg.includes('rate') || msg.includes('429') || msg.includes('too many');
+      const isAuthError = msg.includes('auth') || msg.includes('401') || msg.includes('invalid') && msg.includes('key');
 
       bus.emit({
         type: 'agent:error',
         error: isRateLimit
-          ? new Error('Rate limited by Anthropic API. Wait a moment and try again.')
-          : isOverloaded
-            ? new Error('Anthropic API is overloaded. Try again in a few seconds.')
-            : isAuthError
-              ? new Error('API key is invalid or expired. Run moth with a new key.')
-              : error,
+          ? new Error('Rate limited. Wait a moment and try again.')
+          : isAuthError
+            ? new Error('API key is invalid or expired. Check your key and try again.')
+            : error,
         recoverable: !isAuthError,
         timestamp: Date.now(),
       });
@@ -341,134 +340,59 @@ export class AgentLoop {
     const tool = this.toolMap.get(toolName);
     if (!tool) {
       const result = { content: `Unknown tool: ${toolName}`, isError: true };
-      bus.emit({
-        type: 'tool:complete',
-        toolId,
-        content: result.content,
-        isError: true,
-        durationMs: 0,
-        timestamp: Date.now(),
-      });
+      bus.emit({ type: 'tool:complete', toolId, content: result.content, isError: true, durationMs: 0, timestamp: Date.now() });
       return result;
     }
 
-    // Validate input against schema
     const validation = validateToolInput(tool, input);
     if (!validation.valid) {
-      const result = {
-        content: `Invalid input for ${toolName}: ${validation.errors.join(', ')}`,
-        isError: true,
-      };
-      bus.emit({
-        type: 'tool:complete',
-        toolId,
-        content: result.content,
-        isError: true,
-        durationMs: 0,
-        timestamp: Date.now(),
-      });
+      const result = { content: `Invalid input for ${toolName}: ${validation.errors.join(', ')}`, isError: true };
+      bus.emit({ type: 'tool:complete', toolId, content: result.content, isError: true, durationMs: 0, timestamp: Date.now() });
       return result;
     }
 
-    // Check if tool needs user approval
     if (tool.requiresConfirmation && this.config.confirmDestructive) {
       const approved = await this.requestApproval(toolId, toolName, input);
       if (!approved) {
         const result = { content: 'Tool execution denied by user.', isError: true };
-        bus.emit({
-          type: 'tool:complete',
-          toolId,
-          content: result.content,
-          isError: true,
-          durationMs: 0,
-          timestamp: Date.now(),
-        });
+        bus.emit({ type: 'tool:complete', toolId, content: result.content, isError: true, durationMs: 0, timestamp: Date.now() });
         return result;
       }
     }
 
-    // Execute with timeout
-    bus.emit({
-      type: 'tool:executing',
-      toolId,
-      toolName,
-      timestamp: Date.now(),
-    });
-
+    bus.emit({ type: 'tool:executing', toolId, toolName, timestamp: Date.now() });
     const startTime = Date.now();
 
     try {
       const result = await Promise.race([
         tool.execute(input),
         new Promise<ToolResult>((_, reject) =>
-          setTimeout(
-            () => reject(new Error(`Tool ${toolName} timed out after ${this.config.toolTimeoutMs}ms`)),
-            this.config.toolTimeoutMs,
-          ),
+          setTimeout(() => reject(new Error(`Tool ${toolName} timed out after ${this.config.toolTimeoutMs}ms`)), this.config.toolTimeoutMs),
         ),
       ]);
 
       const durationMs = Date.now() - startTime;
-
-      bus.emit({
-        type: 'tool:complete',
-        toolId,
-        content: result.content,
-        isError: result.isError ?? false,
-        durationMs,
-        timestamp: Date.now(),
-      });
-
+      bus.emit({ type: 'tool:complete', toolId, content: result.content, isError: result.isError ?? false, durationMs, timestamp: Date.now() });
       return result;
     } catch (err) {
       const durationMs = Date.now() - startTime;
       const msg = err instanceof Error ? err.message : String(err);
       const result = { content: `Tool error: ${msg}`, isError: true };
-
-      bus.emit({
-        type: 'tool:complete',
-        toolId,
-        content: result.content,
-        isError: true,
-        durationMs,
-        timestamp: Date.now(),
-      });
-
+      bus.emit({ type: 'tool:complete', toolId, content: result.content, isError: true, durationMs, timestamp: Date.now() });
       return result;
     }
   }
 
-  /**
-   * Request user approval for a tool execution.
-   * Emits an event and waits for approval/denial via event bus.
-   */
-  private requestApproval(
-    toolId: string,
-    toolName: string,
-    input: Record<string, unknown>,
-  ): Promise<boolean> {
+  private requestApproval(toolId: string, toolName: string, input: Record<string, unknown>): Promise<boolean> {
     this.state = 'waiting_approval';
-
-    bus.emit({
-      type: 'tool:approval_required',
-      toolId,
-      toolName,
-      input,
-      timestamp: Date.now(),
-    });
-
+    bus.emit({ type: 'tool:approval_required', toolId, toolName, input, timestamp: Date.now() });
     return new Promise<boolean>((resolve) => {
       this.pendingApproval = { toolId, toolName, input, resolve };
     });
   }
 
-  /**
-   * Cancel the current operation (streaming or tool execution).
-   */
   cancel(): void {
-    if (this.abortController) {
-      this.abortController.abort();
-    }
+    if (this.abortController) this.abortController.abort();
     if (this.pendingApproval) {
       this.pendingApproval.resolve(false);
       this.pendingApproval = null;
@@ -476,54 +400,33 @@ export class AgentLoop {
     this.state = 'idle';
   }
 
-  /**
-   * Trim conversation history when approaching context window limit.
-   * Keeps system message + first user message + last N messages.
-   * Rough estimation: 4 chars ≈ 1 token.
-   */
   private trimContextIfNeeded(): void {
-    const estimateTokens = (msg: ConversationMessage): number => {
-      if (typeof msg.content === 'string') {
-        return Math.ceil(msg.content.length / 4);
-      }
-      // Array content — estimate from stringified
+    const estimateTokens = (msg: ChatMessage): number => {
+      if (typeof msg.content === 'string') return Math.ceil(msg.content.length / 4);
       return Math.ceil(JSON.stringify(msg.content).length / 4);
     };
 
     let totalTokens = this.history.reduce((sum, msg) => sum + estimateTokens(msg), 0);
-
     if (totalTokens <= this.config.contextWindowTokens) return;
 
-    // Keep first message (initial context) and trim from the front
     const first = this.history[0];
     let removed = 0;
 
-    while (
-      this.history.length > 2 &&
-      totalTokens > this.config.contextWindowTokens * 0.8
-    ) {
-      const removed_msg = this.history.splice(1, 1)[0]!;
-      totalTokens -= estimateTokens(removed_msg);
+    while (this.history.length > 2 && totalTokens > this.config.contextWindowTokens * 0.8) {
+      const removedMsg = this.history.splice(1, 1)[0]!;
+      totalTokens -= estimateTokens(removedMsg);
       removed++;
     }
 
-    // Re-insert first if we accidentally removed it
     if (this.history[0] !== first && first) {
       this.history.unshift(first);
     }
 
     if (removed > 0) {
-      bus.emit({
-        type: 'session:context_trimmed',
-        removedMessages: removed,
-        timestamp: Date.now(),
-      });
+      bus.emit({ type: 'session:context_trimmed', removedMessages: removed, timestamp: Date.now() });
     }
   }
 
-  /**
-   * Clear conversation history and reset state.
-   */
   clearHistory(): void {
     this.history = [];
     this.state = 'idle';
