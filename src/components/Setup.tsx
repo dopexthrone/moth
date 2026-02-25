@@ -92,7 +92,7 @@ export function Setup({ onComplete }: SetupProps): React.ReactElement {
     return (
       <Box flexDirection="column" padding={1}>
         <Box marginBottom={1}>
-          <Text color={theme.purple} bold>{'◈ moth setup'}</Text>
+          <Text color={theme.purple} bold>{'◈ rosie setup'}</Text>
         </Box>
         <Box marginBottom={1}>
           <Text color={theme.text}>Select your AI provider:</Text>
@@ -117,7 +117,7 @@ export function Setup({ onComplete }: SetupProps): React.ReactElement {
   return (
     <Box flexDirection="column" padding={1}>
       <Box marginBottom={1}>
-        <Text color={theme.purple} bold>{'◈ moth setup'}</Text>
+        <Text color={theme.purple} bold>{'◈ rosie setup'}</Text>
         <Text color={theme.textDim}> — {provider.name}</Text>
       </Box>
 
@@ -146,7 +146,7 @@ export function Setup({ onComplete }: SetupProps): React.ReactElement {
 
       <Box marginTop={1}>
         <Text color={theme.textDim}>
-          Enter to save · Esc to go back · Key stored at ~/.config/moth/.api-key
+          Enter to save · Esc to go back · Key stored at ~/.config/rosie/.api-key
         </Text>
       </Box>
     </Box>

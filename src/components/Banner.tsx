@@ -10,7 +10,7 @@ export function Banner(): React.ReactElement {
     <Box flexDirection="column" marginBottom={1}>
       <Box>
         <Text color={theme.purple} bold>
-          {'  ◈ moth '}
+          {'  ◈ rosie '}
         </Text>
         <Text color={theme.textMuted}>v0.1.0</Text>
         <Text color={theme.textDim}> — </Text>

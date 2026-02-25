@@ -1,10 +1,10 @@
 {
-  "name": "@motherlabs/moth",
+  "name": "@motherlabs/rosie",
   "version": "0.1.0",
-  "description": "AI coding assistant for the terminal — powered by Claude",
+  "description": "AI coding assistant for the terminal. Multi-provider: xAI, Anthropic, OpenAI, Google, OpenRouter.",
   "type": "module",
   "bin": {
-    "moth": "./dist/cli.js"
+    "rosie": "./dist/cli.js"
   },
   "scripts": {
     "build": "tsup",
@@ -22,10 +22,16 @@
   "keywords": [
     "cli",
     "ai",
-    "claude",
     "coding-assistant",
     "terminal",
+    "xai",
+    "grok",
     "anthropic",
+    "claude",
+    "openai",
+    "gemini",
+    "openrouter",
+    "agentic",
     "motherlabs"
   ],
   "author": "Motherlabs",

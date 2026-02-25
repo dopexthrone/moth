@@ -4,7 +4,7 @@
  * Components subscribe to what they need — no prop drilling, no callback hell.
  */
 
-export type MothEvent =
+export type RosieEvent =
   | { type: 'user:input'; message: string; timestamp: number }
   | { type: 'agent:thinking'; timestamp: number }
   | { type: 'agent:text'; delta: string; timestamp: number }
@@ -24,10 +24,10 @@ export type MothEvent =
   | { type: 'system:error'; error: Error; fatal: boolean; timestamp: number }
   | { type: 'system:shutdown'; reason: string; timestamp: number };
 
-export type MothEventType = MothEvent['type'];
+export type RosieEventType = RosieEvent['type'];
 
-type EventHandler<T extends MothEventType> = (
-  event: Extract<MothEvent, { type: T }>,
+type EventHandler<T extends RosieEventType> = (
+  event: Extract<RosieEvent, { type: T }>,
 ) => void | Promise<void>;
 
 /**
@@ -36,10 +36,11 @@ type EventHandler<T extends MothEventType> = (
  */
 export class EventBus {
   private handlers = new Map<string, Set<EventHandler<any>>>();
-  private history: MothEvent[] = [];
+  private history: RosieEvent[] = [];
   private maxHistory = 1000;
+  private emittingError = false; // Guard against infinite recursion
 
-  on<T extends MothEventType>(type: T, handler: EventHandler<T>): () => void {
+  on<T extends RosieEventType>(type: T, handler: EventHandler<T>): () => void {
     if (!this.handlers.has(type)) {
       this.handlers.set(type, new Set());
     }
@@ -51,7 +52,7 @@ export class EventBus {
     };
   }
 
-  emit(event: MothEvent): void {
+  emit(event: RosieEvent): void {
     this.history.push(event);
     if (this.history.length > this.maxHistory) {
       this.history = this.history.slice(-this.maxHistory);
@@ -65,27 +66,41 @@ export class EventBus {
           // If handler returns a promise, catch unhandled rejections
           if (result && typeof result === 'object' && 'catch' in result) {
             (result as Promise<void>).catch((err) => {
-              this.emit({
-                type: 'system:error',
-                error: err instanceof Error ? err : new Error(String(err)),
-                fatal: false,
-                timestamp: Date.now(),
-              });
+              this.safeEmitError(err);
             });
           }
         } catch (err) {
-          this.emit({
-            type: 'system:error',
-            error: err instanceof Error ? err : new Error(String(err)),
-            fatal: false,
-            timestamp: Date.now(),
-          });
+          this.safeEmitError(err);
         }
       }
     }
   }
 
-  getHistory(type?: MothEventType): MothEvent[] {
+  /**
+   * Emit a system:error without risking infinite recursion.
+   * If we're already inside an error emission, log to stderr and bail.
+   */
+  private safeEmitError(err: unknown): void {
+    if (this.emittingError) {
+      // Already handling an error — break the cycle, fall back to stderr
+      const msg = err instanceof Error ? err.message : String(err);
+      console.error(`[rosie:event-bus] Suppressed recursive error: ${msg}`);
+      return;
+    }
+    this.emittingError = true;
+    try {
+      this.emit({
+        type: 'system:error',
+        error: err instanceof Error ? err : new Error(String(err)),
+        fatal: false,
+        timestamp: Date.now(),
+      });
+    } finally {
+      this.emittingError = false;
+    }
+  }
+
+  getHistory(type?: RosieEventType): RosieEvent[] {
     if (type) return this.history.filter((e) => e.type === type);
     return [...this.history];
   }

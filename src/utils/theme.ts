@@ -1,7 +1,7 @@
 /**
- * Moth color theme — inverted from Claude Code's dark theme.
+ * Rosie color theme — inverted from Claude Code's dark theme.
  * Claude Code: dark bg, light text, orange/tan accents
- * Moth: warm light bg, dark text, purple/coral accents
+ * Rosie: warm light bg, dark text, purple/coral accents
  */
 
 export const theme = {

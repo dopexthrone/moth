@@ -41,7 +41,7 @@ export const writeFileTool: Tool = {
       await fs.mkdir(dir, { recursive: true, mode: 0o755 });
 
       // Atomic write: write to temp file, then rename
-      const tmpPath = path.join(os.tmpdir(), `moth-write-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+      const tmpPath = path.join(os.tmpdir(), `rosie-write-${Date.now()}-${Math.random().toString(36).slice(2)}`);
       await fs.writeFile(tmpPath, content, 'utf-8');
 
       try {

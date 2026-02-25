@@ -27,13 +27,14 @@ interface PendingApproval {
 
 interface AppProps {
   apiKey: string;
+  configOverrides?: Partial<import('../utils/config.js').RosieConfig>;
 }
 
 let entryId = 0;
 
-export function App({ apiKey }: AppProps): React.ReactElement {
+export function App({ apiKey, configOverrides }: AppProps): React.ReactElement {
   const { exit } = useApp();
-  const config = loadConfig();
+  const config = { ...loadConfig(), ...configOverrides };
   const agentRef = useRef<AgentLoop | null>(null);
 
   const [conversation, setConversation] = useState<ConversationEntry[]>([]);
@@ -165,6 +166,7 @@ export function App({ apiKey }: AppProps): React.ReactElement {
 
     return () => {
       for (const unsub of unsubs) unsub();
+      agent.destroy();
     };
   }, [apiKey, config.provider, config.model, config.maxTokens, config.confirmTools, config.baseUrl]);
 
@@ -270,7 +272,7 @@ export function App({ apiKey }: AppProps): React.ReactElement {
       {/* Live streaming text */}
       {streamingText && (
         <Box flexDirection="column" marginLeft={2}>
-          <Text color={theme.purple} bold>{'◈ moth'}</Text>
+          <Text color={theme.purple} bold>{'◈ rosie'}</Text>
           <Box marginLeft={2}>
             <Text color={theme.text} wrap="wrap">
               {streamingText}
@@ -329,7 +331,7 @@ function ConversationItem({ entry }: { entry: ConversationEntry }): React.ReactE
   if (entry.type === 'assistant') {
     return (
       <Box flexDirection="column" marginLeft={2}>
-        <Text color={theme.purple} bold>{'◈ moth'}</Text>
+        <Text color={theme.purple} bold>{'◈ rosie'}</Text>
         <Box marginLeft={2}>
           <Text color={theme.text} wrap="wrap">{entry.content}</Text>
         </Box>

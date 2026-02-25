@@ -74,6 +74,7 @@ export class OpenAICompatibleProvider implements ModelProvider {
       messages,
       stream: true,
       max_tokens: params.maxTokens || 8192,
+      stream_options: { include_usage: true },
     };
 
     if (tools && tools.length > 0) {

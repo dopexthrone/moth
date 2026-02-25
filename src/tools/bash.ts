@@ -44,10 +44,10 @@ export const bashTool: Tool = {
       let killed = false;
 
       // Use spawn with shell for consistent behavior, but with safety checks done above
+      // Don't use spawn's built-in timeout — manage it ourselves for proper SIGKILL escalation
       const proc = spawn('bash', ['-c', command], {
         cwd: getProjectRoot(),
         env: { ...process.env },
-        timeout,
         stdio: ['ignore', 'pipe', 'pipe'],
       });
 
@@ -62,7 +62,24 @@ export const bashTool: Tool = {
       proc.stdout?.on('data', collectOutput);
       proc.stderr?.on('data', collectOutput);
 
+      // Enforce timeout via kill
+      let killTimer: ReturnType<typeof setTimeout> | undefined;
+      let forceKillTimer: ReturnType<typeof setTimeout> | undefined;
+
+      killTimer = setTimeout(() => {
+        if (!proc.killed) {
+          killed = true;
+          proc.kill('SIGTERM');
+          // Force kill after grace period
+          forceKillTimer = setTimeout(() => {
+            if (!proc.killed) proc.kill('SIGKILL');
+          }, 5000);
+        }
+      }, timeout);
+
       proc.on('error', (err) => {
+        clearTimeout(killTimer);
+        clearTimeout(forceKillTimer);
         resolve({
           content: `Failed to execute: ${err.message}`,
           isError: true,
@@ -70,6 +87,9 @@ export const bashTool: Tool = {
       });
 
       proc.on('close', (code, signal) => {
+        clearTimeout(killTimer);
+        clearTimeout(forceKillTimer);
+
         let output = Buffer.concat(chunks).toString('utf-8');
 
         if (totalSize >= MAX_OUTPUT) {
@@ -85,18 +105,6 @@ export const bashTool: Tool = {
           isError: code !== 0,
         });
       });
-
-      // Enforce timeout via kill
-      setTimeout(() => {
-        if (!proc.killed) {
-          killed = true;
-          proc.kill('SIGTERM');
-          // Force kill after grace period
-          setTimeout(() => {
-            if (!proc.killed) proc.kill('SIGKILL');
-          }, 5000);
-        }
-      }, timeout);
     });
   },
 };

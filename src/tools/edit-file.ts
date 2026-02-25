@@ -75,7 +75,7 @@ export const editFileTool: Tool = {
       const newContent = content.replace(oldStr, newStr);
 
       // Atomic write
-      const tmpPath = path.join(os.tmpdir(), `moth-edit-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+      const tmpPath = path.join(os.tmpdir(), `rosie-edit-${Date.now()}-${Math.random().toString(36).slice(2)}`);
       await fs.writeFile(tmpPath, newContent, 'utf-8');
 
       try {

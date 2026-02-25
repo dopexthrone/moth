@@ -1,10 +1,9 @@
-import { execFile, exec } from 'node:child_process';
+import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import type { Tool, ToolResult } from './types.js';
 import { resolveSafePath, getProjectRoot } from './sandbox.js';
 
 const execFileAsync = promisify(execFile);
-const execAsync = promisify(exec);
 
 export const grepTool: Tool = {
   name: 'grep_search',

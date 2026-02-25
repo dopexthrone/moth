@@ -58,8 +58,8 @@ export function createProvider(config: ProviderConfig): ModelProvider {
         baseUrl,
         model: config.model,
         extraHeaders: {
-          'HTTP-Referer': 'https://github.com/motherlabs/moth',
-          'X-Title': 'Moth CLI',
+          'HTTP-Referer': 'https://github.com/dopexthrone/moth',
+          'X-Title': 'Rosie CLI',
         },
       });
 

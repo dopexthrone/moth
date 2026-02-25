@@ -13,7 +13,7 @@ export const errorColor = chalk.hex(theme.error);
 export const warningColor = chalk.hex(theme.warning);
 
 // Styled elements
-export const prompt = brand.bold('moth ▸');
+export const prompt = brand.bold('rosie ▸');
 export const arrow = brand('▸');
 export const dot = brandLight('●');
 export const check = successColor('✓');

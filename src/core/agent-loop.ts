@@ -1,5 +1,5 @@
 /**
- * The agentic loop — the brain of moth.
+ * The agentic loop — the brain of Rosie.
  *
  * This is a proper state machine that drives the conversation cycle:
  *   user input → model call → tool execution → model call → ... → idle
@@ -29,7 +29,7 @@ const DEFAULT_CONFIG: AgentConfig = {
   contextWindowTokens: 180_000,
 };
 
-const SYSTEM_PROMPT = `You are Moth, an AI coding assistant built by Motherlabs.
+const SYSTEM_PROMPT = `You are Rosie, an AI coding assistant built by Motherlabs.
 
 You work in the user's terminal to help with software engineering: writing code, debugging, refactoring, explaining systems, running tests, managing git.
 
@@ -78,6 +78,7 @@ export class AgentLoop {
     input: Record<string, unknown>;
     resolve: (approved: boolean) => void;
   } | null = null;
+  private unsubscribes: Array<() => void> = [];
 
   constructor(provider: ModelProvider, tools: Tool[], config?: Partial<AgentConfig>) {
     this.provider = provider;
@@ -95,18 +96,28 @@ export class AgentLoop {
       this.toolMap.set(tool.name, tool);
     }
 
-    // Listen for approval/denial events
-    bus.on('tool:approved', (event) => {
-      if (this.pendingApproval && this.pendingApproval.toolId === event.toolId) {
-        this.pendingApproval.resolve(true);
-      }
-    });
+    // Listen for approval/denial events (track for cleanup)
+    this.unsubscribes.push(
+      bus.on('tool:approved', (event) => {
+        if (this.pendingApproval && this.pendingApproval.toolId === event.toolId) {
+          this.pendingApproval.resolve(true);
+        }
+      }),
+      bus.on('tool:denied', (event) => {
+        if (this.pendingApproval && this.pendingApproval.toolId === event.toolId) {
+          this.pendingApproval.resolve(false);
+        }
+      }),
+    );
+  }
 
-    bus.on('tool:denied', (event) => {
-      if (this.pendingApproval && this.pendingApproval.toolId === event.toolId) {
-        this.pendingApproval.resolve(false);
-      }
-    });
+  /**
+   * Clean up event listeners. Must be called when the agent loop is discarded.
+   */
+  destroy(): void {
+    this.cancel();
+    for (const unsub of this.unsubscribes) unsub();
+    this.unsubscribes = [];
   }
 
   get currentState(): LoopState {
@@ -309,7 +320,7 @@ export class AgentLoop {
       // Classify common API errors
       const msg = error.message.toLowerCase();
       const isRateLimit = msg.includes('rate') || msg.includes('429') || msg.includes('too many');
-      const isAuthError = msg.includes('auth') || msg.includes('401') || msg.includes('invalid') && msg.includes('key');
+      const isAuthError = msg.includes('authentication') || msg.includes('401') || (msg.includes('invalid') && msg.includes('key'));
 
       bus.emit({
         type: 'agent:error',
@@ -364,12 +375,14 @@ export class AgentLoop {
     const startTime = Date.now();
 
     try {
+      let timeoutHandle: ReturnType<typeof setTimeout>;
       const result = await Promise.race([
         tool.execute(input),
-        new Promise<ToolResult>((_, reject) =>
-          setTimeout(() => reject(new Error(`Tool ${toolName} timed out after ${this.config.toolTimeoutMs}ms`)), this.config.toolTimeoutMs),
-        ),
+        new Promise<ToolResult>((_, reject) => {
+          timeoutHandle = setTimeout(() => reject(new Error(`Tool ${toolName} timed out after ${this.config.toolTimeoutMs}ms`)), this.config.toolTimeoutMs);
+        }),
       ]);
+      clearTimeout(timeoutHandle!);
 
       const durationMs = Date.now() - startTime;
       bus.emit({ type: 'tool:complete', toolId, content: result.content, isError: result.isError ?? false, durationMs, timestamp: Date.now() });

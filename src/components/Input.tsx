@@ -28,9 +28,8 @@ export function Input({ onSubmit, disabled = false, placeholder }: InputProps): 
         return;
       }
 
-      if (key.ctrl && input === 'c') {
-        process.exit(0);
-      }
+      // Ctrl+C is handled at the App level for cancel/exit logic
+      if (key.ctrl && input === 'c') return;
 
       if (key.ctrl && input === 'l') {
         // Clear would need app-level handler

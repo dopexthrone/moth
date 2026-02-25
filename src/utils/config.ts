@@ -3,11 +3,11 @@ import path from 'node:path';
 import os from 'node:os';
 import type { ProviderID } from '../core/providers/types.js';
 
-const CONFIG_DIR = path.join(os.homedir(), '.config', 'moth');
+const CONFIG_DIR = path.join(os.homedir(), '.config', 'rosie');
 const CONFIG_FILE = path.join(CONFIG_DIR, 'config.json');
 const KEY_FILE = path.join(CONFIG_DIR, '.api-key');
 
-export interface MothConfig {
+export interface RosieConfig {
   provider: ProviderID;
   model: string;
   maxTokens: number;
@@ -16,7 +16,7 @@ export interface MothConfig {
   baseUrl?: string;
 }
 
-const DEFAULT_CONFIG: MothConfig = {
+const DEFAULT_CONFIG: RosieConfig = {
   provider: 'xai',
   model: 'grok-3-beta',
   maxTokens: 8192,
@@ -30,7 +30,7 @@ function ensureConfigDir(): void {
   }
 }
 
-export function loadConfig(): MothConfig {
+export function loadConfig(): RosieConfig {
   ensureConfigDir();
   try {
     if (fs.existsSync(CONFIG_FILE)) {
@@ -43,7 +43,7 @@ export function loadConfig(): MothConfig {
   return { ...DEFAULT_CONFIG };
 }
 
-export function saveConfig(config: Partial<MothConfig>): void {
+export function saveConfig(config: Partial<RosieConfig>): void {
   ensureConfigDir();
   const current = loadConfig();
   const merged = { ...current, ...config };
@@ -65,7 +65,7 @@ export function getApiKey(): string | null {
   if (providerKey) return providerKey;
 
   // 2. Generic env var
-  const genericKey = process.env.MOTH_API_KEY;
+  const genericKey = process.env.ROSIE_API_KEY;
   if (genericKey) return genericKey;
 
   // 3. Config file

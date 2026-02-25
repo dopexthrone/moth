@@ -3,7 +3,7 @@ import { render } from 'ink';
 import meow from 'meow';
 import { App } from './components/App.js';
 import { Setup } from './components/Setup.js';
-import { getApiKey, loadConfig, saveConfig } from './utils/config.js';
+import { getApiKey } from './utils/config.js';
 import { setProjectRoot } from './tools/sandbox.js';
 import { SessionManager } from './core/session.js';
 import type { ProviderID } from './core/providers/types.js';
@@ -11,7 +11,7 @@ import type { ProviderID } from './core/providers/types.js';
 const cli = meow(
   `
   Usage
-    $ moth [options]
+    $ rosie [options]
 
   Options
     --provider, -p  AI provider: xai, anthropic, openai, google, openrouter, custom
@@ -21,7 +21,7 @@ const cli = meow(
     --version, -v   Show version
     --help, -h      Show this help
 
-  Providers & Models (Feb 2026)
+  Providers & Models
     xai         grok-4, grok-3-beta, grok-3-mini-beta
     anthropic   claude-opus-4-6, claude-sonnet-4-6, claude-haiku-4-5-20251001
     openai      gpt-4.5-preview, gpt-4.1, gpt-4.1-mini, o3, o3-mini, o4-mini
@@ -29,11 +29,11 @@ const cli = meow(
     openrouter  any model via OpenRouter (e.g., anthropic/claude-sonnet-4-6)
 
   Examples
-    $ moth                                    # uses configured provider
-    $ moth -p xai -m grok-3-beta              # xAI Grok 3
-    $ moth -p anthropic -m claude-sonnet-4-6  # Anthropic Claude
-    $ moth -p openai -m gpt-4.1              # OpenAI GPT-4.1
-    $ moth -p openrouter                      # OpenRouter
+    $ rosie                                    # uses configured provider
+    $ rosie -p xai -m grok-3-beta              # xAI Grok 3
+    $ rosie -p anthropic -m claude-sonnet-4-6  # Anthropic Claude
+    $ rosie -p openai -m gpt-4.1              # OpenAI GPT-4.1
+    $ rosie -p openrouter                      # OpenRouter
 
   Environment Variables
     XAI_API_KEY         xAI API key
@@ -41,10 +41,10 @@ const cli = meow(
     OPENAI_API_KEY      OpenAI API key
     GOOGLE_API_KEY      Google API key
     OPENROUTER_API_KEY  OpenRouter API key
-    MOTH_API_KEY        Generic fallback (any provider)
+    ROSIE_API_KEY       Generic fallback (any provider)
 
   Setup
-    Run moth and follow the interactive setup, or set the
+    Run rosie and follow the interactive setup, or set the
     appropriate environment variable for your provider.
 `,
   {
@@ -69,13 +69,12 @@ const cli = meow(
   },
 );
 
-// Apply CLI flag overrides to config
-const overrides: Record<string, unknown> = {};
-if (cli.flags.provider) overrides.provider = cli.flags.provider as ProviderID;
-if (cli.flags.model) overrides.model = cli.flags.model;
-if (cli.flags.baseUrl) overrides.baseUrl = cli.flags.baseUrl;
-if (!cli.flags.confirm) overrides.confirmTools = false;
-if (Object.keys(overrides).length > 0) saveConfig(overrides);
+// Apply CLI flag overrides as session-only overrides (don't persist to config file)
+const cliOverrides: Partial<import('./utils/config.js').RosieConfig> = {};
+if (cli.flags.provider) cliOverrides.provider = cli.flags.provider as ProviderID;
+if (cli.flags.model) cliOverrides.model = cli.flags.model as string;
+if (cli.flags.baseUrl) cliOverrides.baseUrl = cli.flags.baseUrl;
+if (!cli.flags.confirm) cliOverrides.confirmTools = false;
 
 setProjectRoot(process.cwd());
 
@@ -92,12 +91,12 @@ function Root(): React.ReactElement {
     return <Setup onComplete={(key) => setApiKey(key)} />;
   }
 
-  return <App apiKey={apiKey} />;
+  return <App apiKey={apiKey} configOverrides={cliOverrides} />;
 }
 
 const nodeVersion = parseInt(process.versions.node.split('.')[0]!, 10);
 if (nodeVersion < 18) {
-  console.error(`\x1b[31mmoth requires Node.js 18 or later. You have ${process.versions.node}.\x1b[0m`);
+  console.error(`\x1b[31mrosie requires Node.js 18 or later. You have ${process.versions.node}.\x1b[0m`);
   process.exit(1);
 }
 

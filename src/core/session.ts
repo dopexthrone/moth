@@ -7,7 +7,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { getConfigDir } from '../utils/config.js';
-import { bus, type MothEvent } from './event-bus.js';
+import { bus, type RosieEvent } from './event-bus.js';
 
 const SESSIONS_DIR = path.join(getConfigDir(), 'sessions');
 const MAX_SESSIONS = 20;
@@ -25,6 +25,7 @@ export class SessionManager {
   private sessionFile: string;
   private writeStream: fs.WriteStream | null = null;
   private messageCount = 0;
+  private unsubscribes: Array<() => void> = [];
 
   constructor() {
     this.sessionId = crypto.randomUUID();
@@ -52,7 +53,7 @@ export class SessionManager {
     });
 
     // Record relevant events
-    const eventTypes: Array<MothEvent['type']> = [
+    const eventTypes: Array<RosieEvent['type']> = [
       'user:input',
       'agent:text:done',
       'agent:tool_request',
@@ -62,10 +63,12 @@ export class SessionManager {
     ];
 
     for (const eventType of eventTypes) {
-      bus.on(eventType, (event) => {
-        this.writeEntry(event);
-        this.messageCount++;
-      });
+      this.unsubscribes.push(
+        bus.on(eventType, (event) => {
+          this.writeEntry(event);
+          this.messageCount++;
+        }),
+      );
     }
 
     // Cleanup old sessions
@@ -80,6 +83,8 @@ export class SessionManager {
    * Close the session file.
    */
   close(): void {
+    for (const unsub of this.unsubscribes) unsub();
+    this.unsubscribes = [];
     if (this.writeStream) {
       this.writeStream.end();
       this.writeStream = null;
@@ -130,7 +135,7 @@ export class SessionManager {
     });
   }
 
-  private writeEntry(event: MothEvent): void {
+  private writeEntry(event: RosieEvent): void {
     if (!this.writeStream) return;
     try {
       this.writeStream.write(JSON.stringify(event) + '\n');
