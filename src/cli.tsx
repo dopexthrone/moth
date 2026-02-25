@@ -1,12 +1,6 @@
-import React, { useState, useEffect } from 'react';
-import { render } from 'ink';
 import meow from 'meow';
-import { App } from './components/App.js';
-import { Setup } from './components/Setup.js';
-import { getApiKey } from './utils/config.js';
-import { setProjectRoot } from './tools/sandbox.js';
-import { SessionManager } from './core/session.js';
 import type { ProviderID } from './core/providers/types.js';
+import type { RosieConfig } from './utils/config.js';
 
 const cli = meow(
   `
@@ -18,6 +12,7 @@ const cli = meow(
     --model, -m     Model ID (e.g., grok-3-beta, claude-sonnet-4-6, gpt-4.1-mini)
     --base-url      Custom API base URL (for self-hosted or proxied endpoints)
     --no-confirm    Skip tool confirmation prompts
+    --ui            Use rich Ink/React UI (requires interactive TTY)
     --version, -v   Show version
     --help, -h      Show this help
 
@@ -34,6 +29,7 @@ const cli = meow(
     $ rosie -p anthropic -m claude-sonnet-4-6  # Anthropic Claude
     $ rosie -p openai -m gpt-4.1              # OpenAI GPT-4.1
     $ rosie -p openrouter                      # OpenRouter
+    $ rosie --ui                               # rich terminal UI (Ink)
 
   Environment Variables
     XAI_API_KEY         xAI API key
@@ -65,35 +61,22 @@ const cli = meow(
         type: 'boolean',
         default: true,
       },
+      ui: {
+        type: 'boolean',
+        default: false,
+      },
     },
   },
 );
 
-// Apply CLI flag overrides as session-only overrides (don't persist to config file)
-const cliOverrides: Partial<import('./utils/config.js').RosieConfig> = {};
+// CLI flag overrides (session-only, never persisted)
+const cliOverrides: Partial<RosieConfig> = {};
 if (cli.flags.provider) cliOverrides.provider = cli.flags.provider as ProviderID;
 if (cli.flags.model) cliOverrides.model = cli.flags.model as string;
 if (cli.flags.baseUrl) cliOverrides.baseUrl = cli.flags.baseUrl;
 if (!cli.flags.confirm) cliOverrides.confirmTools = false;
 
-setProjectRoot(process.cwd());
-
-function Root(): React.ReactElement {
-  const [apiKey, setApiKey] = useState<string | null>(getApiKey());
-  const [session] = useState(() => new SessionManager());
-
-  useEffect(() => {
-    session.start();
-    return () => session.close();
-  }, [session]);
-
-  if (!apiKey) {
-    return <Setup onComplete={(key) => setApiKey(key)} />;
-  }
-
-  return <App apiKey={apiKey} configOverrides={cliOverrides} />;
-}
-
+// Node version gate
 const nodeVersion = parseInt(process.versions.node.split('.')[0]!, 10);
 if (nodeVersion < 18) {
   console.error(`\x1b[31mrosie requires Node.js 18 or later. You have ${process.versions.node}.\x1b[0m`);
@@ -111,4 +94,39 @@ process.on('unhandledRejection', (reason) => {
   if (process.env.DEBUG) console.error(reason);
 });
 
-render(<Root />);
+// ── Launch ──
+
+if (cli.flags.ui && process.stdin.isTTY) {
+  // Rich Ink UI — requires TTY
+  const React = await import('react');
+  const { render } = await import('ink');
+  const { App } = await import('./components/App.js');
+  const { Setup } = await import('./components/Setup.js');
+  const { getApiKey: getKey } = await import('./utils/config.js');
+  const { setProjectRoot } = await import('./tools/sandbox.js');
+  const { SessionManager } = await import('./core/session.js');
+
+  setProjectRoot(process.cwd());
+
+  function Root(): React.ReactElement {
+    const [apiKey, setApiKey] = React.useState<string | null>(getKey());
+    const [session] = React.useState(() => new SessionManager());
+
+    React.useEffect(() => {
+      session.start();
+      return () => session.close();
+    }, [session]);
+
+    if (!apiKey) {
+      return React.createElement(Setup, { onComplete: (key: string) => setApiKey(key) });
+    }
+
+    return React.createElement(App, { apiKey, configOverrides: cliOverrides });
+  }
+
+  render(React.createElement(Root));
+} else {
+  // Default: readline terminal — works everywhere
+  const { startTerminal } = await import('./terminal.js');
+  startTerminal(cliOverrides);
+}
